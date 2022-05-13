@@ -1,494 +1,221 @@
-# swagger-demo
+# Swagger + Mybatis-plus
 
-# Mybatis-plus代码生成源码分析
+* API框架——简化前后端集成联调。
 
-## 总体的流程
+- Restful Api 文档在线自动生成器 => **API 文档 与API 定义同步更新**
+- 直接运行，在线测试API
+- 支持多种语言 （如：Java，PHP等）
+- 官网：https://swagger.io/
 
-**AutoGenerator mpg = new AutoGenerator();**
+> ### SpringBoot集成Swagger
 
-**-->mpg.execute();**
+1: 新建项目，导入Meaven依赖
 
-**-->templateEngine.batchOutput()**
+~~~xml
+ 			<!-- https://mvnrepository.com/artifact/io.springfox/springfox-swagger2 -->
+            <dependency>
+                <groupId>io.springfox</groupId>
+                <artifactId>springfox-swagger2</artifactId>
+                <version>2.9.2</version>
+            </dependency>
+            <!-- https://mvnrepository.com/artifact/io.springfox/springfox-swagger-ui -->
+            <dependency>
+                <groupId>io.springfox</groupId>
+                <artifactId>springfox-swagger-ui</artifactId>
+                <version>2.9.2</version>
+            </dependency>
+~~~
 
-**-->Map<String, Object> objectMap = getObjectMap(tableInfo);**
+2: 编写HelloController，测试确保运行成功！
 
-**-->writerFile(objectMap,templateFilePath,entityFile);**
-
-关键是objectMap，里面的对象就是模板文件中可以取到的。
-
-第一步我们需要new一个代码生成器的对象
+3: 创建config包，创建SwaggerConfigl类
 
 ~~~java
-AutoGenerator mpg = new AutoGenerator();
-~~~
+package com.gf.swaggerdemo.config;
 
-进入这个AutoGenerator这个类可以看到有以下属性：
-
-~~~java
-    /**
-     * 配置信息
-     */
-    protected ConfigBuilder config;
-    /**
-     * 注入配置
-     */
-    @Getter(AccessLevel.NONE)
-    @Setter(AccessLevel.NONE)
-    protected InjectionConfig injectionConfig;
-    /**
-     * 数据源配置
-     */
-    private DataSourceConfig dataSource;
-    /**
-     * 数据库表配置
-     */
-    private StrategyConfig strategy;
-    /**
-     * 包 相关配置
-     */
-    private PackageConfig packageInfo;
-    /**
-     * 模板 相关配置
-     */
-    private TemplateConfig template;
-    /**
-     * 全局 相关配置
-     */
-    private GlobalConfig globalConfig;
-    /**
-     * 模板引擎
-     */
-    private AbstractTemplateEngine templateEngine;
-~~~
-
-所以我们在代码生成类中（CodeGenerator）主要配置的就是这些属性。
-
-## 数据库类型与JAVA类型相互转化问题
-
-首先要关注数据源配置中**数据库类型与JAVA类型相互转换问题**。
-
-数据源配置通过
-
-~~~java
-DataSourceConfig dsc = new DataSourceConfig();
-dsc.setTypeConvert()
-mpg.setDataSource(dsc);
-~~~
-
-往setTypeConvert配置不同数据源转化的对象。在源码DataSourceConfig中可以看到typeConvert是ITypeConvert类型。
-
-~~~java
-private ITypeConvert typeConvert;
-~~~
-
-ITypeConvert是一个接口，部分现实类如下：
+import org.springframework.context.annotation.Configuration;
+import springfox.documentation.swagger2.annotations.EnableSwagger2;
 
 
+@Configuration
+@EnableSwagger2
+public class SwaggerConfig {
 
-![image-20220512153734785](C:\Users\lb\AppData\Roaming\Typora\typora-user-images\image-20220512153734785.png)
-
-所以用户可以根据自己选择的数据源传入对象数据源类型转换的实现类。
-
-这里使用传入OracleTypeConvert举例子，在OracleTypeConvert.java可以看到类型转换函数processTypeConvert。
-
-~~~java
-@Override
-public IColumnType processTypeConvert(GlobalConfig config, String fieldType) {
-    return TypeConverts.use(fieldType)
-        .test(containsAny("char", "clob").then(STRING))
-        .test(containsAny("date", "timestamp").then(p -> toDateType(config)))
-        .test(contains("number").then(OracleTypeConvert::toNumberType))
-        .test(contains("float").then(FLOAT))
-        .test(contains("blob").then(BLOB))
-        .test(containsAny("binary", "raw").then(BYTE_ARRAY))
-        .or(STRING);
-    }
-~~~
-
-但是默认的类型转化函数不用一定满足需求，所以我们可以根据自己需求对processTypeConvert进行重写：比如
-
-~~~java
-        
-dsc.setTypeConvert(new OracleTypeConvert(){
-        @Override
-        public IColumnType processTypeConvert(GlobalConfig globalConfig, String fieldType) {
-            String t = fieldType.toLowerCase();
-            if (t.contains("varchar2")) {
-                return DbColumnType.STRING;
-            } else if (t.contains("char")) {
-                return DbColumnType.BASE_CHAR;
-            } else if (t.contains("clob")) {
-                return DbColumnType.CLOB;
-            } else if (t.contains("number")) {
-                if (t.matches("number\\([1]\\)")) {
-                    return DbColumnType.BASE_BOOLEAN;
-                }
-                else if (t.matches("number\\([2]\\)")) {
-                    return DbColumnType.BASE_BYTE;
-                }
-                else if (t.matches("number\\([3-4]\\)")) {
-                    return DbColumnType.BASE_SHORT;
-                }
-                else if (t.matches("number\\([5-9]\\)") || t.matches("number")) {
-                    return DbColumnType.BASE_INT;
-                }
-                else if (t.matches("number\\(\\d+,\\d+\\)")) {
-                    return DbColumnType.BASE_DOUBLE;
-                }
-                else if (t.matches("number\\(1[0-8]\\)")) {
-                    return DbColumnType.BASE_LONG;
-                }else
-                {
-                    return DbColumnType.BIG_DECIMAL;
-                }
-            } else if (t.contains("timestamp")) {
-                return DbColumnType.TIMESTAMP;
-            } else {
-                return new OracleTypeConvert().processTypeConvert(globalConfig, fieldType);
-            }
-        }
-    });
-    mpg.setDataSource(dsc);
-~~~
-
-## 自定义属性输入
-
-~~~java
-InjectionConfig injectionConfig = new InjectionConfig() {
-    //自定义属性注入:abc
-    //在.ftl(或者是.vm)模板中，通过${cfg.abc}获取属性
-    @Override
-    public void initMap() {
-        Map<String, Object> map = new HashMap<>();
-        map.put("abc", this.getConfig().getGlobalConfig().getAuthor() + "-mp");
-        this.setMap(map);
-    }
-};
-AutoGenerator mpg = new AutoGenerator();
-//配置自定义属性注入
-mpg.setCfg(injectionConfig);
-~~~
-
-在模板中通过以下方式取值
-
-```xml
-entity2.java.ftl
-自定义属性注入abc=${cfg.abc}
-
-entity2.java.vm
-自定义属性注入abc=$!{cfg.abc}
-```
-
-**为什么可以通过cfg取值呢**？
-
-AutoGenerator mpg = new AutoGenerator();-->mpg.execute();-->templateEngine.batchOutput()
-
-batchOutput()部分源码可解释,可以看到objectMap.put("cfg", injectionConfig.getMap());
-
-~~~java
-        // 自定义内容
-        InjectionConfig injectionConfig = getConfigBuilder().getInjectionConfig();
-        if (null != injectionConfig) {
-                injectionConfig.initTableMap(tableInfo);
-                objectMap.put("cfg", injectionConfig.getMap());
-                List<FileOutConfig> focList = injectionConfig.getFileOutConfigList();
-                if (CollectionUtils.isNotEmpty(focList)) {
-                    for (FileOutConfig foc : focList) {
-                        if (isCreate(FileType.OTHER, foc.outputFile(tableInfo))) {
-                               writerFile(objectMap, foc.getTemplatePath(), foc.outputFile(tableInfo));
-                            }
-                        }
-                    }
-                }
-~~~
-
-## 自定义entity.java.ftl实现在指定字段上加上指定注解
-
-### 源码分析
-
-首先明确自定义需求：**在指定表字段上添加注解**。
-
-首先思考entity.java.ftl文件中怎么获得**配置信息和表信息**？
-
-比如为什么可以有
-
-~~~ftl
-<#if swagger2>
-import io.swagger.annotations.ApiModel;
-import io.swagger.annotations.ApiModelProperty;
-</#if>
-~~~
-
-为什么可以取到
-
-~~~java
-<#if table.convert>
-@TableName("${table.name}")
-</#if>
-~~~
-
-带着疑问debug源码，首先
-
-~~~java
-AutoGenerator mpg = new AutoGenerator();
-// 各种配置，然后执行execute()方法；
-mpg.execute();
-~~~
-
-进入AutoGenerator.java中看到execute()方法
-
-~~~java
-/**
-* 生成代码
-*/
-public void execute() {
-    logger.debug("==========================准备生成文件...==========================");
-    // 初始化配置
-    if (null == config) {
-   config = new ConfigBuilder(packageInfo, dataSource, strategy, template, globalConfig);
-    if (null != injectionConfig) {
-          injectionConfig.setConfig(config);
-            }
-        }
-    if (null == templateEngine) {
-        // 为了兼容之前逻辑，采用 Velocity 引擎 【 默认 】
-        templateEngine = new VelocityTemplateEngine();
-    }
-    // 模板引擎初始化执行文件输出 
-    templateEngine.init(this.pretreatmentConfigBuilder(config)).mkdirs().batchOutput().open();
-     logger.debug("==========================文件生成完成！！！==========================");
-    }
-~~~
-
-看到出初始化配置之后会执行templateEngine的init()等方法。templateEngine类型是AbstractTemplateEngine 
-
-进入AbstractTemplateEngine.java看到batchOutput()才是输出 java xml 文件的关键函数；batchOutput()部分函数：
-
-~~~java
-    /**
-     * 输出 java xml 文件
-     */
-    public AbstractTemplateEngine batchOutput() {
-        try {
-            List<TableInfo> tableInfoList = getConfigBuilder().getTableInfoList();
-            for (TableInfo tableInfo : tableInfoList) {
-                Map<String, Object> objectMap = getObjectMap(tableInfo);
-                Map<String, String> pathInfo = getConfigBuilder().getPathInfo();
-                TemplateConfig template = getConfigBuilder().getTemplate();
-                // 自定义内容
-                InjectionConfig injectionConfig = getConfigBuilder().getInjectionConfig();
-                if (null != injectionConfig) {
-                    injectionConfig.initTableMap(tableInfo);
-                    objectMap.put("cfg", injectionConfig.getMap());
-                    List<FileOutConfig> focList = injectionConfig.getFileOutConfigList();
-                    if (CollectionUtils.isNotEmpty(focList)) {
-                        for (FileOutConfig foc : focList) {
-                            if (isCreate(FileType.OTHER, foc.outputFile(tableInfo))) {
-                                writerFile(objectMap, foc.getTemplatePath(), foc.outputFile(tableInfo));
-                            }
-                        }
-                    }
-                }
-                // Mp.java
-                String entityName = tableInfo.getEntityName();
-                if (null != entityName && null != pathInfo.get(ConstVal.ENTITY_PATH)) {
-                    String entityFile = String.format((pathInfo.get(ConstVal.ENTITY_PATH) + File.separator + "%s" + suffixJavaOrKt()), entityName);
-                    if (isCreate(FileType.ENTITY, entityFile)) {
-                        writerFile(objectMap, templateFilePath(template.getEntity(getConfigBuilder().getGlobalConfig().isKotlin())), entityFile);
-                    }
-                }
-~~~
-
-如果想要知道objectMap的key和value可以在AbstractTemplateEngine.java中打断点查看。
-
-### 具体实现
-
-自定义属性注入
-
-~~~java
-// 自定义配置
-        InjectionConfig cfg = new InjectionConfig() {
-            @Override
-            public void initMap() {
-                // to do nothing
-                Map<String,Object> map = new HashMap<>();
-                map.put("validation_NotBlank", true);
-                map.put("validation_Length", true);
-                this.setMap(map);
-            }
-        };
-~~~
-
-重写entity.java.ftl
-
-~~~ftl
-package ${package.Entity};
-
-<#list table.importPackages as pkg>
-import ${pkg};
-</#list>
-<#if swagger2>
-import io.swagger.annotations.ApiModel;
-import io.swagger.annotations.ApiModelProperty;
-</#if>
-<#if cfg.validation_NotBlank>
-import javax.validation.constraints.NotBlank;
-</#if>
-<#if cfg.validation_Length>
-import org.hibernate.validator.constraints.Length;
-</#if>
-<#if entityLombokModel>
-import lombok.Data;
-import lombok.EqualsAndHashCode;
-    <#if chainModel>
-import lombok.experimental.Accessors;
-    </#if>
-</#if>
-
-/**
- * <p>
- * ${table.comment!}
- * </p>
- *
- * @author ${author}
- * @since ${date}
- */
-<#if entityLombokModel>
-@Data
-    <#if superEntityClass??>
-@EqualsAndHashCode(callSuper = true)
-    <#else>
-@EqualsAndHashCode(callSuper = false)
-    </#if>
-    <#if chainModel>
-@Accessors(chain = true)
-    </#if>
-</#if>
-<#if table.convert>
-@TableName("${table.name}")
-</#if>
-<#if swagger2>
-@ApiModel(value="${entity}对象", description="${table.comment!}")
-</#if>
-<#if superEntityClass??>
-public class ${entity} extends ${superEntityClass}<#if activeRecord><${entity}></#if> {
-<#elseif activeRecord>
-public class ${entity} extends Model<${entity}> {
-<#else>
-public class ${entity} implements Serializable {
-</#if>
-
-<#if entitySerialVersionUID>
-    private static final long serialVersionUID = 1L;
-</#if>
-<#-- ----------  BEGIN 字段循环遍历  ---------->
-<#list table.fields as field>
-    <#if field.keyFlag>
-        <#assign keyPropertyName="${field.propertyName}"/>
-    </#if>
-
-    <#if field.comment!?length gt 0>
-        <#if swagger2>
-    @ApiModelProperty(value = "${field.comment}")
-        <#else>
-    /**
-     * ${field.comment}
-     */
-        </#if>
-    </#if>
-    <#if field.keyFlag>
-        <#-- 主键 -->
-        <#if field.keyIdentityFlag>
-    @TableId(value = "${field.annotationColumnName}", type = IdType.AUTO)
-        <#elseif idType??>
-    @TableId(value = "${field.annotationColumnName}", type = IdType.${idType})
-        <#elseif field.convert>
-    @TableId("${field.annotationColumnName}")
-        </#if>
-    @NotBlank(message = "${field.name}不能为空")
-        <#-- 普通字段 -->
-    <#elseif field.fill??>
-    <#-- -----   存在字段填充设置   ----->
-        <#if field.convert>
-    @TableField(value = "${field.annotationColumnName}", fill = FieldFill.${field.fill})
-        <#else>
-    @TableField(fill = FieldFill.${field.fill})
-        </#if>
-    <#elseif field.convert>
-    @TableField("${field.annotationColumnName}")
-    </#if>
-    <#-- 长度限制 -->
-    <#if "TOPORG" == field.name>
-    @Length(min = 32)
-    </#if>
-    <#-- 乐观锁注解 -->
-    <#if (versionFieldName!"") == field.name>
-    @Version
-    </#if>
-    <#-- 逻辑删除注解 -->
-    <#if (logicDeleteFieldName!"") == field.name>
-    @TableLogic
-    </#if>
-    private ${field.propertyType} ${field.propertyName};
-</#list>
-<#------------  END 字段循环遍历  ---------->
-
-<#if !entityLombokModel>
-    <#list table.fields as field>
-        <#if field.propertyType == "boolean">
-            <#assign getprefix="is"/>
-        <#else>
-            <#assign getprefix="get"/>
-        </#if>
-    public ${field.propertyType} ${getprefix}${field.capitalName}() {
-        return ${field.propertyName};
-    }
-
-    <#if chainModel>
-    public ${entity} set${field.capitalName}(${field.propertyType} ${field.propertyName}) {
-    <#else>
-    public void set${field.capitalName}(${field.propertyType} ${field.propertyName}) {
-    </#if>
-        this.${field.propertyName} = ${field.propertyName};
-        <#if chainModel>
-        return this;
-        </#if>
-    }
-    </#list>
-</#if>
-
-<#if entityColumnConstant>
-    <#list table.fields as field>
-    public static final String ${field.name?upper_case} = "${field.name}";
-
-    </#list>
-</#if>
-<#if activeRecord>
-    @Override
-    protected Serializable pkVal() {
-    <#if keyPropertyName??>
-        return this.${keyPropertyName};
-    <#else>
-        return null;
-    </#if>
-    }
-
-</#if>
-<#if !entityLombokModel>
-    @Override
-    public String toString() {
-        return "${entity}{" +
-    <#list table.fields as field>
-        <#if field_index==0>
-            "${field.propertyName}=" + ${field.propertyName} +
-        <#else>
-            ", ${field.propertyName}=" + ${field.propertyName} +
-        </#if>
-    </#list>
-        "}";
-    }
-</#if>
 }
+~~~
 
+4:访问测试 ：http://localhost:8080/swagger-ui.html ，可以看到swagger的界面。
+
+**如果报空指针异常是因为应该是SpringBoot2.6.0和Swagger2.9.2不兼容。**
+
+![image-20220511174143883](C:\Users\lb\AppData\Roaming\Typora\typora-user-images\image-20220511174143883.png)
+
+> ### 配置Swagger
+
+Swagger实例Bean是Docket，所以通过配置Docket实例来配置Swaggger。
+
+~~~java
+package com.gf.swaggerdemo.config;
+
+
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import springfox.documentation.service.ApiInfo;
+import springfox.documentation.service.Contact;
+import springfox.documentation.spi.DocumentationType;
+import springfox.documentation.spring.web.plugins.Docket;
+import springfox.documentation.swagger2.annotations.EnableSwagger2;
+
+import java.util.ArrayList;
+
+
+@Configuration
+@EnableSwagger2
+public class SwaggerConfig {
+
+    @Bean
+    public Docket docket() {
+        return new Docket(DocumentationType.SWAGGER_2).apiInfo(apiInfo());
+    }
+
+    //配置文档信息
+    private ApiInfo apiInfo() {
+        Contact contact = new Contact("刘斌", "http://xxx.xxx.com/联系人访问链接", "303862074@qq.com");
+        return new ApiInfo(
+                "Swagger学习", // 标题
+                "学习演示如何配置Swagger", // 描述
+                "v1.0", // 版本
+                "http://terms.service.url/组织链接", // 组织链接
+                contact, // 联系人信息
+                "Apach 2.0 许可", // 许可
+                "许可链接", // 许可连接
+                new ArrayList<>()// 扩展
+        );
+    }
+}
+~~~
+
+![image-20220511175318248](C:\Users\lb\AppData\Roaming\Typora\typora-user-images\image-20220511175318248.png)
+
+> ### 配置扫描接口
+
+项目中会有很多接口，怎么配置让Swagger扫描到指定接口呢？
+
+1、构建Docket时通过select()方法配置怎么扫描接口。
+
+~~~java
+@Bean
+public Docket docket() {
+    return new Docket(DocumentationType.SWAGGER_2)
+            .apiInfo(apiInfo())
+            .select()// 通过.select()方法，去配置扫描接口,RequestHandlerSelectors配置如何扫描接口
+            .apis(RequestHandlerSelectors.basePackage("com.gf.swaggerdemo.controller"))
+            .build();
+    }
+~~~
+
+2、除了通过包路径配置扫描接口外，还可以通过配置其他方式扫描接口，这里注释一下所有的配置方式：
+
+~~~java
+any() // 扫描所有，项目中的所有接口都会被扫描到
+none() // 不扫描接口
+// 通过方法上的注解扫描，如withMethodAnnotation(GetMapping.class)只扫描get请求
+withMethodAnnotation(final Class<? extends Annotation> annotation)
+// 通过类上的注解扫描，如.withClassAnnotation(Controller.class)只扫描有controller注解的类中的接口
+withClassAnnotation(final Class<? extends Annotation> annotation)
+basePackage(final String basePackage) // 根据包路径扫描接口
+~~~
+
+3、除此之外，我们还可以配置接口扫描过滤：
+
+~~~java
+@Bean
+public Docket docket() {
+   return new Docket(DocumentationType.SWAGGER_2)
+      .apiInfo(apiInfo())
+      .select()// 通过.select()方法，去配置扫描接口,RequestHandlerSelectors配置如何扫描接口
+      .apis(RequestHandlerSelectors.basePackage("com.kuang.swagger.controller"))
+       // 配置如何通过path过滤,即这里只扫描请求以/kuang开头的接口
+      .paths(PathSelectors.ant("/kuang/**"))
+      .build();
+}
+~~~
+
+4、这里的可选值还有
+
+~~~java
+any() // 任何请求都扫描
+none() // 任何请求都不扫描
+regex(final String pathRegex) // 通过正则表达式控制
+ant(final String antPattern) // 通过ant()控制
+~~~
+
+> ### 配置Swagger开关
+
+因为项目开发时存在生产环境和上线环境环境，怎么配置Swagger在指定环境生效呢？
+
+~~~java
+@Bean
+public Docket docket(Environment environment) {
+    // 设置要显示swagger的环境
+    Profiles of = Profiles.of("dev");
+    // 判断当前是否处于该环境
+    // 通过 enable() 接收此参数判断是否要显示
+    boolean b = environment.acceptsProfiles(of);
+    return new Docket(DocumentationType.SWAGGER_2)
+            .apiInfo(apiInfo())
+            .enable(b)
+            .select()// 通过.select()方法，去配置扫描接口,RequestHandlerSelectors配置如何扫描接口
+            .apis(RequestHandlerSelectors.basePackage("com.gf.swaggerdemo.controller"))
+            .build();
+    }
+~~~
+
+> ### 配置API分组
+
+意思就是可以配置多个docket对象
+
+![image-20220511221803943](C:\Users\lb\AppData\Roaming\Typora\typora-user-images\image-20220511221803943.png)
+
+~~~java
+@Bean
+public Docket docket1(){
+    return new Docket(DocumentationType.SWAGGER_2).groupName("group1");
+}
+~~~
+
+> ### 实体配置
+
+只要这个实体在**请求接口**的返回值上（即使是泛型），都能映射到实体项中：
+
+@ApiModel为类添加注释
+
+@ApiModelProperty为类属性添加注释
+
+> ### 常用注解
+
+Swagger的所有注解定义在io.swagger.annotations包下
+
+| @Api(tags = "xxx模块说明")                             | 作用在模块类上                                       |
+| ------------------------------------------------------ | ---------------------------------------------------- |
+| @ApiOperation("xxx接口说明")                           | 作用在接口方法上                                     |
+| @ApiModel("xxxPOJO说明")                               | 作用在模型类上：如VO、BO                             |
+| @ApiModelProperty(value = "xxx属性说明",hidden = true) | 作用在类方法和属性上，hidden设置为true可以隐藏该属性 |
+| @ApiParam("xxx参数说明")                               | 作用在参数、方法和字段上，类似@ApiModelProperty      |
+
+总结：
+
+1. 可以通过Swagger给一些比较难理解的属性或者接口，增加注释信息。
+
+2. 接口文档实时更新。
+3. 可以在线测试。
+
+注意正式发布关闭Swagger，节省内存。
+
+> Mybatis-plus自动生成Swagger只需要在全局配置上开启Swagger
+
+~~~java
+//实体属性 Swagger2 注解
+gc.setSwagger2(true);
 ~~~
 
